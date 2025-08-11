@@ -1777,6 +1777,7 @@ class Trader:
         tf_str_map = {
             ProtoOATrendbarPeriod.M1: '1m',
             ProtoOATrendbarPeriod.M5: '5m',
+            ProtoOATrendbarPeriod.M15: '15m'
             # etc…
         }
         tf_str = tf_str_map.get(response.period)
