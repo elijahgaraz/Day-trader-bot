@@ -13,5 +13,9 @@
         "chart_update_interval_ms": 500,
         "min_bars_for_trading": 100,
         "risk_percentage": 1.0
+    },
+    "advisor": {
+        "url": "",
+        "token": ""
     }
 }

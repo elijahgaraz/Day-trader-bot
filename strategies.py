@@ -2,7 +2,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 import pandas as pd
 from datetime import time
-from indicators import calculate_ema, calculate_atr
+from indicators import calculate_ema, calculate_atr, calculate_rsi, calculate_adx
+from advisor import get_advice
 
 
 class Strategy(ABC):
@@ -110,31 +111,22 @@ class BaseFXStrategy(Strategy):
 
 class DayTradingStrategy(BaseFXStrategy):
     """
-    Day Trading Strategy (FX only)
-
-    - Session filter (08:15–15:45)
-    - Low-volume veto (optional, default on)
-    - EMA trend with ATR buffer zone
-    - ATR-based SL/TP
-    - Simple trailing anchored to entry & favorable excursion
-    - Outputs SL/TP as **pips** (consistent across strategies)
+    Day Trading Strategy (FX only) that consults an AI advisor.
     """
-    NAME = "Day Trading Strategy"
+    NAME = "AI-Assisted Day Trader"
 
     def __init__(
         self,
         settings,
         ema_period: int = 50,
         atr_period: int = 20,
-        stop_mult: float = 2.0,
-        target_mult: float = 3.0,
-        buffer_mult: float = 0.2,  # buffer = ATR * buffer_mult
+        rsi_period: int = 14,
+        adx_period: int = 14,
+        confidence_threshold: float = 0.6,
         # session/window & risk params inherited from BaseFXStrategy
-        session_start: time = time(8, 15),
-        session_end: time = time(15, 45),
+        session_start: time = time(7, 0),
+        session_end: time = time(20, 0),
         pip_size: float = 0.0001,
-        use_volume_filter: bool = True,
-        low_volume_ratio: float = 0.5,
     ):
         super().__init__(
             settings=settings,
@@ -143,112 +135,76 @@ class DayTradingStrategy(BaseFXStrategy):
             session_start=session_start,
             session_end=session_end,
             pip_size=pip_size,
-            use_volume_filter=use_volume_filter,
-            low_volume_ratio=low_volume_ratio,
         )
-        self.stop_mult = stop_mult
-        self.target_mult = target_mult
-        self.buffer_mult = buffer_mult
-
-        # Trailing/position state
-        self.trailing_activated = False
-        self.last_action: Optional[str] = None
-        self.entry_price: Optional[float] = None
-        self.highest_since_entry: Optional[float] = None
-        self.lowest_since_entry: Optional[float] = None
+        self.rsi_period = rsi_period
+        self.adx_period = adx_period
+        self.confidence_threshold = confidence_threshold
 
     def get_required_bars(self) -> Dict[str, int]:
         # Ensure indicator warmup, not just min bars
-        need = max(self.ema_period, self.atr_period) + 5
+        need = max(self.ema_period, self.atr_period, self.rsi_period, self.adx_period) + 5
         return {"15m": max(self.settings.general.min_bars_for_trading, need)}
 
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get("ohlc_15m")
-        if df is None:
-            return self._hold("no data")
-
-        need = self.get_required_bars()["15m"]
-        if len(df) < need:
+        if df is None or len(df) < self.get_required_bars()["15m"]:
             return self._hold("insufficient data")
 
         now = df.index[-1]
         if not self._in_session(now):
             return self._hold("outside trading session")
 
-        ema = calculate_ema(df, self.ema_period, source_col='close').iloc[-1]
-        close = df['close']
+        # --- Calculate indicators ---
+        ema_slow = calculate_ema(df, self.ema_period, source_col='close').iloc[-1]
+        ema_fast = calculate_ema(df, self.ema_period // 2, source_col='close').iloc[-1]
         atr = calculate_atr(df, self.atr_period).iloc[-1]
+        rsi = calculate_rsi(df, self.rsi_period).iloc[-1]
+        adx = calculate_adx(df, self.adx_period).iloc[-1]
 
-        if pd.isna(ema) or pd.isna(atr):
+        if any(pd.isna(v) for v in [ema_slow, ema_fast, atr, rsi, adx]):
             return self._hold("indicators not ready")
 
-        price = float(close.iloc[-1])
+        # --- Construct market snapshot for AI ---
+        snapshot = {
+            "price_bid": float(df['close'].iloc[-1]),
+            "spread_pips": self._to_pips(df['high'].iloc[-1] - df['low'].iloc[-1]), # Simplified spread
+            "trend_ema_5m": float(ema_slow), # Using 15m slow EMA as trend proxy
+            "ema_fast": float(ema_fast),
+            "ema_slow": float(ema_slow),
+            "rsi": float(rsi),
+            "adx": float(adx),
+            "atr_pips": self._to_pips(atr),
+            "session_hour_utc": now.hour,
+            "bot_proposal": {
+                "sl_pips": self._to_pips(atr * 2.0),
+                "tp_pips": self._to_pips(atr * 3.0)
+            }
+        }
 
-        # Volume check (veto only if abnormally low)
-        if not self._volume_ok(df):
-            return self._hold("very low volume")
+        # --- Get advice from AI ---
+        advice = get_advice(
+            snapshot,
+            self.settings.advisor.url,
+            self.settings.advisor.token
+        )
 
-        # Buffer zone around EMA
-        buffer = float(atr) * self.buffer_mult
-        if abs(price - ema) < buffer:
-            return self._hold("within buffer zone")
+        if not advice:
+            return self._hold("advisor request failed")
 
-        # Direction
-        if price > ema:
-            action = "buy"
-            comment = f"price {price:.5f} above EMA{self.ema_period} + buffer"
-        else:
-            action = "sell"
-            comment = f"price {price:.5f} below EMA{self.ema_period} - buffer"
+        action = advice.get("action", "skip")
+        confidence = advice.get("confidence", 0.0)
+        reason = advice.get("reason", "no reason provided")
+        sl_pips = advice.get("sl_pips")
+        tp_pips = advice.get("tp_pips")
 
-        # Reset trailing/entry state on flip
-        if self.last_action != action:
-            self.trailing_activated = False
-            self.entry_price = price
-            self.highest_since_entry = price
-            self.lowest_since_entry = price
-        else:
-            # update extremes
-            if self.entry_price is not None:
-                self.highest_since_entry = max(self.highest_since_entry or price, price)
-                self.lowest_since_entry = min(self.lowest_since_entry or price, price)
+        comment = f"AI({confidence:.2f}): {action.upper()} - {reason}"
 
-        self.last_action = action
-
-        # Base distances (price units)
-        sl_dist = float(atr) * self.stop_mult
-        tp_dist = float(atr) * self.target_mult
-
-        # Trailing activation when price moves further beyond buffer
-        if not self.trailing_activated:
-            if (action == "buy" and price > ema + 2 * buffer) or \
-               (action == "sell" and price < ema - 2 * buffer):
-                self.trailing_activated = True
-                comment += "; trailing stop activated"
-
-        # Trailing anchored to entry & favorable excursion
-        if self.trailing_activated and self.entry_price is not None:
-            be_pad = float(atr) * 0.10  # small cushion to avoid premature BE
-
-            if action == "buy" and self.highest_since_entry:
-                trailed_sl = max(self.entry_price - be_pad,
-                                 self.highest_since_entry - sl_dist)
-                new_sl_dist = max(1e-9, price - trailed_sl)
-                sl_dist = min(sl_dist, new_sl_dist)
-
-            elif action == "sell" and self.lowest_since_entry:
-                trailed_sl = min(self.entry_price + be_pad,
-                                 self.lowest_since_entry + sl_dist)
-                new_sl_dist = max(1e-9, trailed_sl - price)
-                sl_dist = min(sl_dist, new_sl_dist)
-
-        # Convert to pips for execution layer
-        sl_pips = self._to_pips(sl_dist)
-        tp_pips = self._to_pips(tp_dist)
+        if action == "skip" or confidence < self.confidence_threshold:
+            return self._hold(comment)
 
         return {
             "action": action,
-            "comment": f"{self.NAME}: {comment}",
+            "comment": comment,
             "sl_offset": float(sl_pips),
             "tp_offset": float(tp_pips),
         }

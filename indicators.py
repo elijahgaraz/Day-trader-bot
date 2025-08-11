@@ -30,64 +30,24 @@ def calculate_rsi(ohlc_df: pd.DataFrame, length: int = 14, source_col: str = 'cl
         return pd.Series(dtype='float64')
     return ohlc_df.ta.rsi(length=length, close=ohlc_df[source_col], append=False)
 
-def calculate_stochastic(ohlc_df: pd.DataFrame, k: int = 5, d: int = 3, smooth_k: int = 3) -> pd.DataFrame:
+def calculate_adx(ohlc_df: pd.DataFrame, length: int = 14) -> pd.Series:
     """
-    Calculates Stochastic Oscillator (Fast %K and Fast %D).
+    Calculates Average Directional Index (ADX).
     Requires 'high', 'low', 'close'.
-    Returns a DataFrame with 'STOCHk_k_d_smooth_k' and 'STOCHd_k_d_smooth_k' columns.
-    Example column names from pandas-ta: STOCHk_5_3_3, STOCHd_5_3_3
+    Returns a Series with the ADX values.
     """
     if ohlc_df is None or ohlc_df.empty or not all(col in ohlc_df.columns for col in ['high', 'low', 'close']):
-        return pd.DataFrame() # Return empty DataFrame
-    if len(ohlc_df) < max(k,d,smooth_k): # Basic check for enough data
-         return pd.DataFrame()
-    # pandas_ta expects lowercase column names
-    temp_df = ohlc_df.rename(columns={'high': 'high', 'low': 'low', 'close': 'close'})
-    stoch_df = temp_df.ta.stoch(k=k, d=d, smooth_k=smooth_k, append=False)
-    if stoch_df is None or stoch_df.empty:
-        return pd.DataFrame()
-    # Rename columns for easier access if needed, or use pandas_ta default names.
-    # Example: stoch_df.rename(columns={f'STOCHk_{k}_{d}_{smooth_k}': 'K', f'STOCHd_{k}_{d}_{smooth_k}': 'D'}, inplace=True)
-    return stoch_df # Returns DataFrame with STOCHk and STOCHd columns
-
-def calculate_momentum(ohlc_df: pd.DataFrame, length: int = 12, source_col: str = 'close') -> pd.Series:
-    """Calculates Momentum."""
-    if ohlc_df is None or ohlc_df.empty or source_col not in ohlc_df.columns:
         return pd.Series(dtype='float64')
-    if len(ohlc_df) < length:
+    if len(ohlc_df) < length * 2: # ADX needs more data than length
         return pd.Series(dtype='float64')
-    return ohlc_df.ta.mom(length=length, close=ohlc_df[source_col], append=False)
 
-def calculate_donchian(ohlc_df: pd.DataFrame, lower_length: int = 20, upper_length: int = 20) -> pd.DataFrame:
-    """
-    Calculates Donchian Channels. Requires 'high', 'low'.
-    Returns a DataFrame with columns like 'DONCHIANl_20_20', 'DONCHIANm_20_20', 'DONCHIANu_20_20'.
-    """
-    if ohlc_df is None or ohlc_df.empty or not all(col in ohlc_df.columns for col in ['high', 'low']):
-        return pd.DataFrame()
-    if len(ohlc_df) < max(lower_length, upper_length):
-         return pd.DataFrame()
-    # pandas_ta expects lowercase column names
-    temp_df = ohlc_df.rename(columns={'high': 'high', 'low': 'low'})
-    donchian_df = temp_df.ta.donchian(lower_length=lower_length, upper_length=upper_length, append=False)
-    if donchian_df is None or donchian_df.empty:
-        return pd.DataFrame()
-    return donchian_df
+    adx_df = ohlc_df.ta.adx(length=length, append=False)
+    if adx_df is None or adx_df.empty:
+        return pd.Series(dtype='float64')
 
-def calculate_bollinger_bands(ohlc_df: pd.DataFrame, length: int = 20, std: float = 2, source_col: str = 'close') -> pd.DataFrame:
-    """
-    Calculates Bollinger Bands.
-    Returns a DataFrame with columns like 'BBL_20_2.0' (lower), 'BBM_20_2.0' (middle/SMA), 'BBU_20_2.0' (upper),
-    'BBB_20_2.0' (bandwidth), 'BBP_20_2.0' (percent).
-    """
-    if ohlc_df is None or ohlc_df.empty or source_col not in ohlc_df.columns:
-        return pd.DataFrame()
-    if len(ohlc_df) < length:
-        return pd.DataFrame()
-    bbands_df = ohlc_df.ta.bbands(length=length, std=std, close=ohlc_df[source_col], append=False)
-    if bbands_df is None or bbands_df.empty:
-        return pd.DataFrame()
-    return bbands_df
+    # ta.adx returns a DataFrame with ADX, DMP, DMN. We only need the ADX column.
+    adx_series = adx_df.iloc[:, 0] # ADX is typically the first column
+    return adx_series
 
 if __name__ == '__main__':
     # Example Usage (requires a sample CSV or DataFrame)
