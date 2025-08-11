@@ -149,7 +149,8 @@ class Trader:
         self.timeframes_seconds = {
             '15s': 15,
             '1m': 60,
-            '5m': 300
+            '5m': 300,
+            '15m': 900
         }
         self.current_bars = {} # Stores the currently forming bar for each timeframe
         self.ohlc_history = {} # Stores history of completed bars for each timeframe
@@ -598,6 +599,11 @@ class Trader:
                 self._send_get_trendbars_request(
                     symbol_id=self.default_symbol_id,
                     period=ProtoOATrendbarPeriod.M1, # Assuming M1 is the desired period
+                    count=self.max_ohlc_history_len
+                )
+                self._send_get_trendbars_request(
+                    symbol_id=self.default_symbol_id,
+                    period=ProtoOATrendbarPeriod.M15,
                     count=self.max_ohlc_history_len
                 )
                 # Note: We might want to fetch for other timeframes too if strategies use them.
