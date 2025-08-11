@@ -297,11 +297,17 @@ class TradingPage(ttk.Frame):
         self.data_readiness_label = ttk.Label(self, textvariable=self.data_readiness_var)
         self.data_readiness_label.grid(row=9, column=1, sticky="ew", pady=(10,0))
 
+        # AI Advisor Confidence Display
+        ttk.Label(self, text="AI Confidence:").grid(row=10, column=0, sticky="w", padx=(0,5), pady=(5,0))
+        self.ai_confidence_var = tk.StringVar(value="N/A")
+        self.ai_confidence_label = ttk.Label(self, textvariable=self.ai_confidence_var)
+        self.ai_confidence_label.grid(row=10, column=1, sticky="ew", pady=(5,0))
+
         # Start/Stop Day Trading buttons
         self.start_button = ttk.Button(self, text="Start Day Trade", command=self.start_day_trade, state="normal") # Initially disabled
-        self.start_button.grid(row=10, column=0, columnspan=2, pady=(10,0))
+        self.start_button.grid(row=11, column=0, columnspan=2, pady=(10,0))
         self.stop_button  = ttk.Button(self, text="End Day Trade", command=self.stop_day_trade, state="disabled")
-        self.stop_button.grid(row=11, column=0, columnspan=2, pady=(5,0))
+        self.stop_button.grid(row=12, column=0, columnspan=2, pady=(5,0))
 
         # Session Stats frame
         stats = ttk.Labelframe(self, text="Session Stats", padding=10)
@@ -540,6 +546,7 @@ class TradingPage(ttk.Frame):
     
     def stop_day_trade(self):
         if self.is_trading:
+            self.ai_confidence_var.set("N/A") # Reset on stop
             self._toggle_trading_ui(False)
             # reset multi-order state
             self.pending_trades = 0
@@ -604,6 +611,10 @@ class TradingPage(ttk.Frame):
             print(f"Strategy decision: {action_details}")
 
             if action_details and isinstance(action_details, dict):
+                # Update UI with AI confidence
+                confidence = action_details.get('confidence', 0.0)
+                self._ui_queue.put((self._update_ai_confidence, (confidence,)))
+
                 trade_action = action_details.get('action')
                 if trade_action in ("buy", "sell"):
                     sl_offset = action_details.get('sl_offset')
@@ -711,6 +722,17 @@ class TradingPage(ttk.Frame):
                 self.pending_trades = max(0, self.pending_trades - 1)
             except Exception:
                 self.pending_trades = 0
+
+    def _update_ai_confidence(self, confidence: float):
+        """Updates the AI confidence label on the UI."""
+        self.ai_confidence_var.set(f"{confidence:.2f}")
+        # Optionally, color the label based on confidence
+        if confidence >= 0.8:
+            self.ai_confidence_label.config(foreground="green")
+        elif confidence >= 0.6:
+            self.ai_confidence_label.config(foreground="orange")
+        else:
+            self.ai_confidence_label.config(foreground="black")
 
     def _log(self, msg: str):
         ts = time.strftime("%H:%M:%S")

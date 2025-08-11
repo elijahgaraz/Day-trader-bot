@@ -34,15 +34,23 @@ class GeneralSettings:
     # Add other general app settings here if any
 
 @dataclass
+class AdvisorSettings:
+    url: Optional[str] = None
+    token: Optional[str] = None
+
+@dataclass
 class Settings:
     openapi: OpenAPISettings
     general: GeneralSettings
+    advisor: AdvisorSettings
 
     @staticmethod
     def load(path: str = "config.json") -> "Settings":
         # Load secrets from environment variables first
         env_client_id = os.environ.get("CTRADER_CLIENT_ID")
         env_client_secret = os.environ.get("CTRADER_CLIENT_SECRET")
+        env_advisor_url = os.environ.get("ADVISOR_URL")
+        env_advisor_token = os.environ.get("ADVISOR_TOKEN")
 
         try:
             with open(path, 'r') as f:
@@ -56,10 +64,13 @@ class Settings:
 
         openapi_cfg = cfg_data.get("openapi", {})
         general_cfg = cfg_data.get("general", {})
+        advisor_cfg = cfg_data.get("advisor", {})
 
         # Prioritize env vars for secrets, then config file, then None
         client_id = env_client_id if env_client_id else openapi_cfg.get("client_id")
         client_secret = env_client_secret if env_client_secret else openapi_cfg.get("client_secret")
+        advisor_url = env_advisor_url if env_advisor_url else advisor_cfg.get("url")
+        advisor_token = env_advisor_token if env_advisor_token else advisor_cfg.get("token")
 
         if not client_id:
             print("Warning: cTrader Client ID not found in environment variables (CTRADER_CLIENT_ID) or config.json.")
@@ -84,7 +95,12 @@ class Settings:
             batch_profit_target=general_cfg.get("batch_profit_target", 10.0)
         )
 
-        return Settings(openapi=openapi_settings, general=general_settings)
+        advisor_settings = AdvisorSettings(
+            url=advisor_url,
+            token=advisor_token
+        )
+
+        return Settings(openapi=openapi_settings, general=general_settings, advisor=advisor_settings)
 
     def save(self, path: str = "config.json") -> None:
         # Create a representation of settings that is safe to save (e.g., without tokens)
@@ -102,6 +118,12 @@ class Settings:
         # For the new URLs, they have defaults, so they won't be None unless explicitly set to None (which is unlikely)
         openapi_data_to_save = {k: v for k, v in openapi_data_to_save.items() if v is not None}
 
+        advisor_data_to_save = {
+            "url": self.advisor.url if not os.environ.get("ADVISOR_URL") else None,
+            "token": self.advisor.token if not os.environ.get("ADVISOR_TOKEN") else None,
+        }
+        advisor_data_to_save = {k: v for k, v in advisor_data_to_save.items() if v is not None}
+
         if openapi_data_to_save.get("client_id") or openapi_data_to_save.get("client_secret"):
             print(f"Warning: Saving Client ID or Client Secret to '{path}'. "
                   "It's generally recommended to use environment variables for these secrets.")
@@ -114,7 +136,8 @@ class Settings:
                 "min_bars_for_trading": self.general.min_bars_for_trading,
                 "risk_percentage": self.general.risk_percentage,
                 "batch_profit_target": self.general.batch_profit_target,
-            }
+            },
+            "advisor": advisor_data_to_save
         }
         with open(path, 'w') as f:
             json.dump(data_to_save, f, indent=4)
