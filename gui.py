@@ -3,12 +3,12 @@ import threading
 import tkinter as tk
 import queue
 from tkinter import ttk, messagebox, simpledialog
-from typing import List # Added for type hinting
-import pandas as pd # Added for OHLC data handling
-from trading import Trader  # adjust import path if needed
-from strategies import (
-    DayTradingStrategy
-)
+from typing import List, Dict, Any
+import pandas as pd
+from trading import Trader
+from strategies import DayTradingStrategy
+from advisor import get_advice
+from indicators import calculate_ema, calculate_atr, calculate_rsi, calculate_adx
 
 class MainApplication(tk.Tk):
     def __init__(self, settings):
@@ -309,9 +309,13 @@ class TradingPage(ttk.Frame):
         self.stop_button  = ttk.Button(self, text="End Day Trade", command=self.stop_day_trade, state="disabled")
         self.stop_button.grid(row=12, column=0, columnspan=2, pady=(5,0))
 
+        # ChatGPT Analysis Button
+        self.chatgpt_button = ttk.Button(self, text="ChatGPT Analysis", command=self.get_chatgpt_analysis)
+        self.chatgpt_button.grid(row=13, column=0, columnspan=2, pady=(10,0))
+
         # Session Stats frame
         stats = ttk.Labelframe(self, text="Session Stats", padding=10)
-        stats.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10,0))
+        stats.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(10,0))
         stats.columnconfigure(1, weight=1)
 
         self.pnl_var       = tk.StringVar(value="0.00")
@@ -611,10 +615,6 @@ class TradingPage(ttk.Frame):
             print(f"Strategy decision: {action_details}")
 
             if action_details and isinstance(action_details, dict):
-                # Update UI with AI confidence
-                confidence = action_details.get('confidence', 0.0)
-                self._ui_queue.put((self._update_ai_confidence, (confidence,)))
-
                 trade_action = action_details.get('action')
                 if trade_action in ("buy", "sell"):
                     sl_offset = action_details.get('sl_offset')
@@ -740,6 +740,75 @@ class TradingPage(ttk.Frame):
         self.output.insert("end", f"[{ts}] {msg}\n")
         self.output.see("end")
         self.output.configure(state="disabled")
+
+    def get_chatgpt_analysis(self):
+        self._log("Requesting ChatGPT analysis...")
+        self.ai_confidence_var.set("Requesting...")
+        self.ai_confidence_label.config(foreground="orange")
+
+        # This should run in a separate thread to avoid freezing the GUI
+        threading.Thread(target=self._get_chatgpt_analysis_thread, daemon=True).start()
+
+    def _get_chatgpt_analysis_thread(self):
+        try:
+            # 1. Get data
+            df = self.trader.ohlc_history.get('15m', pd.DataFrame())
+            if df.empty or len(df) < 50: # Check for enough data
+                self._ui_queue.put((self._log, ("Not enough 15m data for analysis.",)))
+                self._ui_queue.put((self._update_ai_confidence, 0.0))
+                return
+
+            now = df.index[-1]
+
+            # 2. Calculate indicators
+            ema_slow = calculate_ema(df, 50, source_col='close').iloc[-1]
+            ema_fast = calculate_ema(df, 25, source_col='close').iloc[-1]
+            atr = calculate_atr(df, 20).iloc[-1]
+            rsi = calculate_rsi(df, 14).iloc[-1]
+            adx = calculate_adx(df, 14).iloc[-1]
+
+            if any(pd.isna(v) for v in [ema_slow, ema_fast, atr, rsi, adx]):
+                self._ui_queue.put((self._log, ("Indicators not ready for analysis.",)))
+                self._ui_queue.put((self._update_ai_confidence, 0.0))
+                return
+
+            # 3. Construct snapshot
+            snapshot = {
+                "price_bid": float(df['close'].iloc[-1]),
+                "spread_pips": (df['high'].iloc[-1] - df['low'].iloc[-1]) / 0.0001,
+                "trend_ema_5m": float(ema_slow),
+                "ema_fast": float(ema_fast),
+                "ema_slow": float(ema_slow),
+                "rsi": float(rsi),
+                "adx": float(adx),
+                "atr_pips": atr / 0.0001,
+                "session_hour_utc": now.hour,
+                "bot_proposal": {
+                    "sl_pips": atr / 0.0001 * 2.0,
+                    "tp_pips": atr / 0.0001 * 3.0
+                }
+            }
+
+            # 4. Get advice
+            advice = get_advice(
+                snapshot,
+                self.controller.settings.advisor.url,
+                self.controller.settings.advisor.token
+            )
+
+            # 5. Update UI
+            if advice:
+                confidence = advice.get("confidence", 0.0)
+                reason = advice.get("reason", "No reason provided.")
+                self._ui_queue.put((self._update_ai_confidence, (confidence,)))
+                self._ui_queue.put((self._log, (f"ChatGPT Analysis: {reason}",)))
+            else:
+                self._ui_queue.put((self._log, ("ChatGPT analysis failed.",)))
+                self._ui_queue.put((self._update_ai_confidence, 0.0))
+
+        except Exception as e:
+            self._ui_queue.put((self._log, (f"Error during ChatGPT analysis: {e}",)))
+            self._ui_queue.put((self._update_ai_confidence, 0.0))
 
 
 if __name__ == "__main__":
