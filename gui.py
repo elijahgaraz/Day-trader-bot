@@ -311,7 +311,7 @@ class TradingPage(ttk.Frame):
 
         # Session Stats frame
         stats = ttk.Labelframe(self, text="Session Stats", padding=10)
-        stats.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(10,0))
+        stats.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10,0))
         stats.columnconfigure(1, weight=1)
 
         self.pnl_var       = tk.StringVar(value="0.00")
