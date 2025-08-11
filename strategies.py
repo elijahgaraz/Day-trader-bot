@@ -106,11 +106,11 @@ class BaseFXStrategy(Strategy):
         return curr_vol >= self.low_volume_ratio * avg_vol
 
 
-# ---------- SAFE ----------
+# ---------- DAY TRADING ----------
 
-class SafeStrategy(BaseFXStrategy):
+class DayTradingStrategy(BaseFXStrategy):
     """
-    Safe (Low-Risk) Trend-Following Scalper (FX only)
+    Day Trading Strategy (FX only)
 
     - Session filter (08:15–15:45)
     - Low-volume veto (optional, default on)
@@ -119,15 +119,15 @@ class SafeStrategy(BaseFXStrategy):
     - Simple trailing anchored to entry & favorable excursion
     - Outputs SL/TP as **pips** (consistent across strategies)
     """
-    NAME = "Safe (Low-Risk) Trend-Following Scalper"
+    NAME = "Day Trading Strategy"
 
     def __init__(
         self,
         settings,
-        ema_period: int = 20,
-        atr_period: int = 14,
-        stop_mult: float = 1.0,
-        target_mult: float = 1.0,
+        ema_period: int = 50,
+        atr_period: int = 20,
+        stop_mult: float = 2.0,
+        target_mult: float = 3.0,
         buffer_mult: float = 0.2,  # buffer = ATR * buffer_mult
         # session/window & risk params inherited from BaseFXStrategy
         session_start: time = time(8, 15),
@@ -157,12 +157,17 @@ class SafeStrategy(BaseFXStrategy):
         self.highest_since_entry: Optional[float] = None
         self.lowest_since_entry: Optional[float] = None
 
+    def get_required_bars(self) -> Dict[str, int]:
+        # Ensure indicator warmup, not just min bars
+        need = max(self.ema_period, self.atr_period) + 5
+        return {"15m": max(self.settings.general.min_bars_for_trading, need)}
+
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        df: pd.DataFrame = data.get("ohlc_1m")
+        df: pd.DataFrame = data.get("ohlc_15m")
         if df is None:
             return self._hold("no data")
 
-        need = self.get_required_bars()["1m"]
+        need = self.get_required_bars()["15m"]
         if len(df) < need:
             return self._hold("insufficient data")
 
@@ -247,246 +252,3 @@ class SafeStrategy(BaseFXStrategy):
             "sl_offset": float(sl_pips),
             "tp_offset": float(tp_pips),
         }
-
-
-# ---------- MODERATE ----------
-
-class ModerateStrategy(BaseFXStrategy):
-    NAME = "Moderate Trend-Following Scalper"
-
-    def __init__(
-        self,
-        settings,
-        ema_period: int = 20,
-        atr_period: int = 14,
-        stop_multiplier: float = 1.5,
-        target_multiplier: float = 1.0,
-        session_start: time = time(8, 15),
-        session_end: time = time(15, 45),
-        pip_size: float = 0.0001,
-        use_volume_filter: bool = True,
-        low_volume_ratio: float = 0.5,
-    ):
-        super().__init__(
-            settings, ema_period, atr_period,
-            session_start, session_end, pip_size,
-            use_volume_filter, low_volume_ratio
-        )
-        self.stop_multiplier = stop_multiplier
-        self.target_multiplier = target_multiplier
-
-    def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        df: pd.DataFrame = data.get("ohlc_1m")
-        if df is None or len(df) < self.get_required_bars()["1m"]:
-            return self._hold("insufficient data")
-
-        if not self._in_session(df.index[-1]):
-            return self._hold("outside trading session")
-
-        if not self._volume_ok(df):
-            return self._hold("very low volume")
-
-        close = df["close"]
-        ema = calculate_ema(close, self.ema_period).iloc[-1]
-        atr = calculate_atr(df, self.atr_period).iloc[-1]
-        if pd.isna(ema) or pd.isna(atr):
-            return self._hold("indicators not ready")
-
-        price = close.iloc[-1]
-
-        if price > ema:
-            action = "buy"
-            comment = f"{self.NAME}: bullish trend detected"
-        elif price < ema:
-            action = "sell"
-            comment = f"{self.NAME}: bearish trend detected"
-        else:
-            return self._hold("no clear trend")
-
-        sl_pips = self._to_pips(float(atr) * self.stop_multiplier)
-        tp_pips = self._to_pips(float(atr) * self.target_multiplier)
-        return {"action": action, "comment": comment, "sl_offset": float(sl_pips), "tp_offset": float(tp_pips)}
-
-
-# ---------- AGGRESSIVE ----------
-
-class AggressiveStrategy(BaseFXStrategy):
-    NAME = "Aggressive Trend-Following Scalper"
-
-    def __init__(
-        self,
-        settings,
-        ema_period: int = 10,
-        atr_period: int = 7,
-        stop_multiplier: float = 2.0,
-        target_multiplier: float = 1.5,
-        session_start: time = time(8, 15),
-        session_end: time = time(15, 45),
-        pip_size: float = 0.0001,
-        use_volume_filter: bool = True,
-        low_volume_ratio: float = 0.5,
-    ):
-        super().__init__(
-            settings, ema_period, atr_period,
-            session_start, session_end, pip_size,
-            use_volume_filter, low_volume_ratio
-        )
-        self.stop_multiplier = stop_multiplier
-        self.target_multiplier = target_multiplier
-
-    def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        df: pd.DataFrame = data.get("ohlc_1m")
-        if df is None or len(df) < self.get_required_bars()["1m"]:
-            return self._hold("insufficient data")
-
-        if not self._in_session(df.index[-1]):
-            return self._hold("outside trading session")
-
-        if not self._volume_ok(df):
-            return self._hold("very low volume")
-
-        close = df["close"]
-        ema = calculate_ema(close, self.ema_period).iloc[-1]
-        atr = calculate_atr(df, self.atr_period).iloc[-1]
-        if pd.isna(ema) or pd.isna(atr):
-            return self._hold("indicators not ready")
-
-        price = close.iloc[-1]
-
-        if price > ema:
-            action = "buy"
-            comment = f"{self.NAME}: going long aggressively"
-        elif price < ema:
-            action = "sell"
-            comment = f"{self.NAME}: going short aggressively"
-        else:
-            return self._hold("awaiting breakout")
-
-        sl_pips = self._to_pips(float(atr) * self.stop_multiplier)
-        tp_pips = self._to_pips(float(atr) * self.target_multiplier)
-        return {"action": action, "comment": comment, "sl_offset": float(sl_pips), "tp_offset": float(tp_pips)}
-
-
-# ---------- MOMENTUM FADE ----------
-
-class MomentumStrategy(BaseFXStrategy):
-    NAME = "Momentum Fade Scalper"
-
-    def __init__(
-        self,
-        settings,
-        ema_period: int = 20,
-        atr_period: int = 14,
-        fade_threshold: float = 1.5,  # ATR multiples
-        stop_multiplier: float = 1.0,
-        target_multiplier: float = 1.5,
-        session_start: time = time(8, 15),
-        session_end: time = time(15, 45),
-        pip_size: float = 0.0001,
-        use_volume_filter: bool = True,
-        low_volume_ratio: float = 0.5,
-    ):
-        super().__init__(
-            settings, ema_period, atr_period,
-            session_start, session_end, pip_size,
-            use_volume_filter, low_volume_ratio
-        )
-        self.fade_threshold = fade_threshold
-        self.stop_multiplier = stop_multiplier
-        self.target_multiplier = target_multiplier
-
-    def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        df: pd.DataFrame = data.get("ohlc_1m")
-        if df is None or len(df) < self.get_required_bars()["1m"]:
-            return self._hold("insufficient data")
-
-        if not self._in_session(df.index[-1]):
-            return self._hold("outside trading session")
-
-        if not self._volume_ok(df):
-            return self._hold("very low volume")
-
-        close = df["close"]
-        ema = calculate_ema(close, self.ema_period).iloc[-1]
-        atr = calculate_atr(df, self.atr_period).iloc[-1]
-        if pd.isna(ema) or pd.isna(atr):
-            return self._hold("indicators not ready")
-
-        price = close.iloc[-1]
-        diff = price - ema
-
-        if diff > float(atr) * self.fade_threshold:
-            action = "sell"
-            comment = f"{self.NAME}: fading overextension"
-        elif diff < -float(atr) * self.fade_threshold:
-            action = "buy"
-            comment = f"{self.NAME}: fading downside spike"
-        else:
-            return self._hold("no fade opportunity")
-
-        sl_pips = self._to_pips(float(atr) * self.stop_multiplier)
-        tp_pips = self._to_pips(float(atr) * self.target_multiplier)
-        return {"action": action, "comment": comment, "sl_offset": float(sl_pips), "tp_offset": float(tp_pips)}
-
-
-# ---------- MEAN REVERSION ----------
-
-class MeanReversionStrategy(BaseFXStrategy):
-    NAME = "Mean-Reversion Scalper"
-
-    def __init__(
-        self,
-        settings,
-        ema_period: int = 20,
-        atr_period: int = 14,
-        band_multiplier: float = 2.0,  # ATR multiples
-        stop_multiplier: float = 1.0,
-        target_multiplier: float = 2.0,
-        session_start: time = time(8, 15),
-        session_end: time = time(15, 45),
-        pip_size: float = 0.0001,
-        use_volume_filter: bool = True,
-        low_volume_ratio: float = 0.5,
-    ):
-        super().__init__(
-            settings, ema_period, atr_period,
-            session_start, session_end, pip_size,
-            use_volume_filter, low_volume_ratio
-        )
-        self.band_multiplier = band_multiplier
-        self.stop_multiplier = stop_multiplier
-        self.target_multiplier = target_multiplier
-
-    def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        df: pd.DataFrame = data.get("ohlc_1m")
-        if df is None or len(df) < self.get_required_bars()["1m"]:
-            return self._hold("insufficient data")
-
-        if not self._in_session(df.index[-1]):
-            return self._hold("outside trading session")
-
-        if not self._volume_ok(df):
-            return self._hold("very low volume")
-
-        close = df["close"]
-        ema = calculate_ema(close, self.ema_period).iloc[-1]
-        atr = calculate_atr(df, self.atr_period).iloc[-1]
-        if pd.isna(ema) or pd.isna(atr):
-            return self._hold("indicators not ready")
-
-        price = close.iloc[-1]
-        upper = float(ema) + float(atr) * self.band_multiplier
-        lower = float(ema) - float(atr) * self.band_multiplier
-
-        if price > upper:
-            action = "sell"
-            comment = f"{self.NAME}: price above upper band"
-        elif price < lower:
-            action = "buy"
-            comment = f"{self.NAME}: price below lower band"
-        else:
-            return self._hold("within bands")
-
-        sl_pips = self._to_pips(float(atr) * self.stop_multiplier)
-        tp_pips = self._to_pips(float(atr) * self.target_multiplier)
-        return {"action": action, "comment": comment, "sl_offset": float(sl_pips), "tp_offset": float(tp_pips)}

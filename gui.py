@@ -7,14 +7,13 @@ from typing import List # Added for type hinting
 import pandas as pd # Added for OHLC data handling
 from trading import Trader  # adjust import path if needed
 from strategies import (
-    SafeStrategy, ModerateStrategy, AggressiveStrategy,
-    MomentumStrategy, MeanReversionStrategy
+    DayTradingStrategy
 )
 
 class MainApplication(tk.Tk):
     def __init__(self, settings):
         super().__init__()
-        self.title("Forex Scalper")
+        self.title("Forex Day Trader")
 
         # make window resizable
         self.rowconfigure(0, weight=1)
@@ -209,8 +208,8 @@ class TradingPage(ttk.Frame):
         self._ui_queue = queue.Queue()
         self.after(100, self._process_ui_queue)
 
-        self.is_scalping = False
-        self.scalping_thread = None
+        self.is_trading = False
+        self.trading_thread = None
 
         # Account Info StringVars
         self.account_id_var_tp = tk.StringVar(value="–")
@@ -285,8 +284,8 @@ class TradingPage(ttk.Frame):
 
         # Strategy selector
         ttk.Label(self, text="Strategy:").grid(row=8, column=0, sticky="w", padx=(0,5))
-        self.strategy_var = tk.StringVar(value="Safe")
-        strategy_names = ["Safe", "Moderate", "Aggressive", "Momentum", "Mean Reversion"]
+        self.strategy_var = tk.StringVar(value="Day Trading")
+        strategy_names = ["Day Trading"]
         cb_strat = ttk.Combobox(self, textvariable=self.strategy_var, values=strategy_names, state="readonly")
         cb_strat.grid(row=8, column=1, sticky="ew")
         cb_strat.bind("<<ComboboxSelected>>", lambda e: self._update_data_readiness_display(execute_now=True))
@@ -298,10 +297,10 @@ class TradingPage(ttk.Frame):
         self.data_readiness_label = ttk.Label(self, textvariable=self.data_readiness_var)
         self.data_readiness_label.grid(row=9, column=1, sticky="ew", pady=(10,0))
 
-        # Start/Stop Scalping buttons
-        self.start_button = ttk.Button(self, text="Begin Scalping", command=self.start_scalping, state="normal") # Initially disabled
+        # Start/Stop Day Trading buttons
+        self.start_button = ttk.Button(self, text="Start Day Trade", command=self.start_day_trade, state="normal") # Initially disabled
         self.start_button.grid(row=10, column=0, columnspan=2, pady=(10,0))
-        self.stop_button  = ttk.Button(self, text="Stop Scalping", command=self.stop_scalping, state="disabled")
+        self.stop_button  = ttk.Button(self, text="End Day Trade", command=self.stop_day_trade, state="disabled")
         self.stop_button.grid(row=11, column=0, columnspan=2, pady=(5,0))
 
         # Session Stats frame
@@ -359,11 +358,7 @@ class TradingPage(ttk.Frame):
 
         # Instantiate the selected strategy to get its requirements
         # This could be optimized by caching strategy instances or their requirements
-        if selected_strategy_name == "Safe": strategy_instance = SafeStrategy(self.controller.settings)
-        elif selected_strategy_name == "Moderate": strategy_instance = ModerateStrategy(self.controller.settings)
-        elif selected_strategy_name == "Aggressive": strategy_instance = AggressiveStrategy(self.controller.settings)
-        elif selected_strategy_name == "Momentum": strategy_instance = MomentumStrategy(self.controller.settings)
-        elif selected_strategy_name == "Mean Reversion": strategy_instance = MeanReversionStrategy(self.controller.settings)
+        if selected_strategy_name == "Day Trading": strategy_instance = DayTradingStrategy(self.controller.settings)
 
         if not strategy_instance:
             self.data_readiness_var.set("Select a strategy")
@@ -398,7 +393,7 @@ class TradingPage(ttk.Frame):
             final_status_text += " (Ready)"
             current_fg_color = "green"
             if hasattr(self, 'start_button'):
-                 self.start_button.config(state="normal" if not self.is_scalping else "disabled")
+                 self.start_button.config(state="normal" if not self.is_trading else "disabled")
         else:
             final_status_text += " (Waiting...)"
             current_fg_color = "orange"
@@ -479,24 +474,20 @@ class TradingPage(ttk.Frame):
             self.price_var.set("ERR")
             self._log(f"Error fetching price: {e}")
 
-    def start_scalping(self):
-        self._log("start_scalping() called")
+    def start_day_trade(self):
+        self._log("start_day_trade() called")
         symbol = self.symbol_var.get().replace("/", "")
 
         # Choose pip size by symbol (override per your symbol metadata if available)
         pip_size = 0.01 if symbol.endswith("JPY") else 0.0001
 
         sel = self.strategy_var.get()
-        if sel == "Safe":
-            strategy = SafeStrategy(self.controller.settings, pip_size=pip_size)
-        elif sel == "Moderate":
-            strategy = ModerateStrategy(self.controller.settings, pip_size=pip_size)
-        elif sel == "Aggressive":
-            strategy = AggressiveStrategy(self.controller.settings, pip_size=pip_size)
-        elif sel == "Mean Reversion":
-            strategy = MeanReversionStrategy(self.controller.settings, pip_size=pip_size)
+        if sel == "Day Trading":
+            strategy = DayTradingStrategy(self.controller.settings, pip_size=pip_size)
         else:
-            strategy = MomentumStrategy(self.controller.settings, pip_size=pip_size)
+            # This part should ideally not be reached if the dropdown is correctly configured
+            messagebox.showerror("Strategy Error", f"Unknown strategy '{sel}' selected.")
+            return
 
         self._log(f"Strategy created: {strategy.NAME}")
 
@@ -534,22 +525,22 @@ class TradingPage(ttk.Frame):
         batch_target              = self.batch_profit_var.get()
 
         # Toggle UI
-        self._toggle_scalping_ui(True)
+        self._toggle_trading_ui(True)
 
-        # 4) Launch scalping loop thread
-        self.scalping_thread = threading.Thread(
-            target=self._scalp_loop,
+        # 4) Launch trading loop thread
+        self.trading_thread = threading.Thread(
+            target=self._trade_loop,
             args=(symbol, tp, sl, size, strategy, batch_target),
             daemon=True
         )
-        self.scalping_thread.start()
+        self.trading_thread.start()
 
-        messagebox.showinfo("Scalping Started", f"Live scalping thread started for {symbol}")
+        messagebox.showinfo("Day Trading Started", f"Live trading thread started for {symbol}")
 
     
-    def stop_scalping(self):
-        if self.is_scalping:
-            self._toggle_scalping_ui(False)
+    def stop_day_trade(self):
+        if self.is_trading:
+            self._toggle_trading_ui(False)
             # reset multi-order state
             self.pending_trades = 0
             self.current_batch_trades = 0
@@ -558,16 +549,16 @@ class TradingPage(ttk.Frame):
             except Exception as e:
                 self._log(f"Error closing positions: {e}")
 
-    def _toggle_scalping_ui(self, on: bool):
-        self.is_scalping = on
+    def _toggle_trading_ui(self, on: bool):
+        self.is_trading = on
         state_start = "disabled" if on else "normal"
         state_stop  = "normal"   if on else "disabled"
         self.start_button.config(state=state_start)
         self.stop_button.config(state=state_stop)
 
-    def _scalp_loop(self, symbol: str, tp: float, sl: float, size: float, strategy, batch_target: float):
-        print("SCALP LOOP STARTED")
-        while self.is_scalping:
+    def _trade_loop(self, symbol: str, tp: float, sl: float, size: float, strategy, batch_target: float):
+        print("TRADE LOOP STARTED")
+        while self.is_trading:
             if (self.current_batch_trades + self.pending_trades) >= self.batch_size:
                 summary = self.trader.get_account_summary()
                 equity = summary.get("equity", 0.0) or 0.0
@@ -588,24 +579,23 @@ class TradingPage(ttk.Frame):
             print(f"Tick price: {current_tick_price}")
 
             # Fetch OHLC
-            ohlc_1m_df = self.trader.ohlc_history.get('1m', pd.DataFrame())
+            ohlc_15m_df = self.trader.ohlc_history.get('15m', pd.DataFrame())
             
             if (
-                isinstance(ohlc_1m_df, pd.DataFrame)
-                and not ohlc_1m_df.empty
-                and 'timestamp' in ohlc_1m_df.columns
-                and isinstance(ohlc_1m_df.index, pd.RangeIndex)
+                isinstance(ohlc_15m_df, pd.DataFrame)
+                and not ohlc_15m_df.empty
+                and 'timestamp' in ohlc_15m_df.columns
+                and isinstance(ohlc_15m_df.index, pd.RangeIndex)
             ):
                 try:
-                    ohlc_1m_df['timestamp'] = pd.to_datetime(ohlc_1m_df['timestamp'], utc=True)
-                    ohlc_1m_df.set_index('timestamp', inplace=True)
+                    ohlc_15m_df['timestamp'] = pd.to_datetime(ohlc_15m_df['timestamp'], utc=True)
+                    ohlc_15m_df.set_index('timestamp', inplace=True)
                 except Exception as e:
                     print(f"Error during timestamp normalization: {e}")
 
             # Strategy decision
             action_details = strategy.decide({
-                'ohlc_1m': ohlc_1m_df,
-                'ohlc_15s': self.trader.ohlc_history.get('15s', pd.DataFrame()),
+                'ohlc_15m': ohlc_15m_df,
                 'current_equity': self.trader.equity,
                 'pip_position': None,
                 'current_price_tick': current_tick_price
@@ -662,7 +652,7 @@ class TradingPage(ttk.Frame):
         try:
             price_str = f"{price:.5f}" if price is not None else "N/A"
             self._log(
-                f"{side.upper()} scalp: {symbol} @ {price_str} | "
+                f"{side.upper()} trade: {symbol} @ {price_str} | "
                 f"size={size} lots | GUI SL={sl_pips_gui} pips | GUI TP={tp_pips_gui} pips"
             )
 
